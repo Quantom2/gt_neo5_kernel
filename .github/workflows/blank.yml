@@ -204,12 +204,14 @@ jobs:
           echo "CONFIG_IP6_NF_MATCH_HL=y" >> ./common/arch/arm64/configs/gki_defconfig
 
           # Add BBR Config
-          echo "CONFIG_TCP_CONG_ADVANCED=y" >> ./common/arch/arm64/configs/gki_defconfig 
+          echo "CONFIG_TCP_CONG_ADVANCED=y" >> ./common/arch/arm64/configs/gki_defconfig
           echo "CONFIG_TCP_CONG_BBR=y" >> ./common/arch/arm64/configs/gki_defconfig
-          echo "CONFIG_NET_SCH_FQ=y" >> ./common/arch/arm64/configs/gki_defconfig
           echo "CONFIG_TCP_CONG_BIC=n" >> ./common/arch/arm64/configs/gki_defconfig
           echo "CONFIG_TCP_CONG_WESTWOOD=n" >> ./common/arch/arm64/configs/gki_defconfig
-          echo "CONFIG_TCP_CONG_HTCP=n" >> ./common/arch/arm64/configs/gki_defconfig 
+          echo "CONFIG_TCP_CONG_HTCP=n" >> ./common/arch/arm64/configs/gki_defconfig
+          
+          echo "CONFIG_NET_SCH_FQ=y" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_NET_SCH_FQ_CODEL=y" >> ./common/arch/arm64/configs/gki_defconfig
 
           # Remove check_defconfig
           sed -i 's/check_defconfig//' ./common/build.config.gki
@@ -242,6 +244,11 @@ jobs:
           echo "CONFIG_LZ4KD_COMPRESS=y" >> ./common/arch/arm64/configs/gki_defconfig
           echo "CONFIG_LZ4KD_DECOMPRESS=y" >> ./common/arch/arm64/configs/gki_defconfig
           echo "CONFIG_ZRAM_DEF_COMP_LZ4KD=y" >> ./common/arch/arm64/configs/gki_defconfig
+          
+      - name: Apply ptrace patch
+        run: |
+          cd ~/kernel_platform/common
+          curl -Ls https://raw.githubusercontent.com/fatalcoder524/kernel_patches_additional/refs/heads/main/ptrace.patch  | patch -p1 -F 3
           
       - name: Build 1 (Stock kernel)
         run: |
@@ -291,7 +298,7 @@ jobs:
           cd ~/kernel_platform
           echo "CONFIG_KSU=y" >> ./common/arch/arm64/configs/gki_defconfig
           # Add patches
-          # echo "CONFIG_KSU_KPROBES_HOOK=y" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_KSU_KPROBES_HOOK=y" >> ./common/arch/arm64/configs/gki_defconfig
           
       - name: Build 2 (KernelSU)
         run: |
@@ -327,11 +334,11 @@ jobs:
           
       - name: Add Configuration and SUSfs Settings for Build 3
         run: |
+          cd ~/kernel_platform
           echo "Adding configuration settings to gki_defconfig..."
           
           # Add SUSFS configuration settings
           echo "CONFIG_KSU_SUSFS=y" >> ./common/arch/arm64/configs/gki_defconfig
-          echo "CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT=n" >> ./common/arch/arm64/configs/gki_defconfig # Use n for off KSU
           echo "CONFIG_KSU_SUSFS_SUS_PATH=y" >> ./common/arch/arm64/configs/gki_defconfig
           echo "CONFIG_KSU_SUSFS_SUS_MOUNT=y" >> ./common/arch/arm64/configs/gki_defconfig
           echo "CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT=y" >> ./common/arch/arm64/configs/gki_defconfig
@@ -346,6 +353,8 @@ jobs:
           echo "CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y" >> ./common/arch/arm64/configs/gki_defconfig
           echo "CONFIG_KSU_SUSFS_OPEN_REDIRECT=y" >> ./common/arch/arm64/configs/gki_defconfig
 
+          # Magic mount setting for KSU = n, others = y!
+          echo "CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT=n" >> ./common/arch/arm64/configs/gki_defconfig # Use n for off KSU
           echo "CONFIG_KSU_SUSFS_SUS_SU=y" >> ./common/arch/arm64/configs/gki_defconfig # ALWAYS USE n FOR LATEST ANY KSU
 
       - name: Adding SUSfs in the name KSU for Build 3
@@ -391,7 +400,7 @@ jobs:
           cd ~/kernel_platform/
           echo "CONFIG_KSU=y" >> ./common/arch/arm64/configs/gki_defconfig
           echo "CONFIG_KSU_KPROBES_HOOK=n" >> ./common/arch/arm64/configs/gki_defconfig
-          echo "CONFIG_KSU_MANUAL_HOOK=y" >> ./common/arch/arm64/configs/gki_defconfig #FOR TEST
+          echo "CONFIG_KSU_MANUAL_HOOK=y" >> ./common/arch/arm64/configs/gki_defconfig
 
       - name: Apply manual hooks for Build 4
         run: |
@@ -472,12 +481,12 @@ jobs:
               
       - name: Add Configuration and SUSfs Settings for Build 5
         run: |
+          cd ~/kernel_platform
           # Apply SUS config
           echo "Adding configuration settings to gki_defconfig..."
           
           # Add SUSFS configuration settings
           echo "CONFIG_KSU_SUSFS=y" >> ./common/arch/arm64/configs/gki_defconfig
-          echo "CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT=y" >> ./common/arch/arm64/configs/gki_defconfig # NEXT have Magic mount
           echo "CONFIG_KSU_SUSFS_SUS_PATH=y" >> ./common/arch/arm64/configs/gki_defconfig
           echo "CONFIG_KSU_SUSFS_SUS_MOUNT=y" >> ./common/arch/arm64/configs/gki_defconfig
           echo "CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT=y" >> ./common/arch/arm64/configs/gki_defconfig
@@ -492,6 +501,8 @@ jobs:
           echo "CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y" >> ./common/arch/arm64/configs/gki_defconfig
           echo "CONFIG_KSU_SUSFS_OPEN_REDIRECT=y" >> ./common/arch/arm64/configs/gki_defconfig
 
+          # Magic mount setting for KSU = n, others = y!
+          echo "CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT=y" >> ./common/arch/arm64/configs/gki_defconfig # NEXT have Magic mount
           echo "CONFIG_KSU_SUSFS_SUS_SU=n" >> ./common/arch/arm64/configs/gki_defconfig # ALWAYS USE n FOR LATEST ANY KSU
 
           # Temporary solution
@@ -519,7 +530,7 @@ jobs:
         run: |
           cd ~/kernel_platform
           curl -LSs "https://raw.githubusercontent.com/WildKernels/Wild_KSU/wild/kernel/setup.sh" | bash -
-          git switch wild
+          git switch wild # Make sure it is not SUSfs version
           cd ~/
           
       - name: Getting WildKSU Version to update MOD_VER for Build 6
@@ -542,10 +553,11 @@ jobs:
 
       - name: WildKSU Kernel tweaks for Build 6
         run: |
-          cd ~/kernel_platform
-          echo "CONFIG_KSU=y" >> ./common/arch/arm64/configs/gki_defconfig
           # Add patches
+          cd ~/kernel_platform/
+          echo "CONFIG_KSU=y" >> ./common/arch/arm64/configs/gki_defconfig
           echo "CONFIG_KSU_KPROBES_HOOK=n" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_KSU_MANUAL_HOOK=y" >> ./common/arch/arm64/configs/gki_defconfig
           
       - name: Build 6 (WildKSU)
         run: |
@@ -571,13 +583,53 @@ jobs:
           cd ~/kernel_platform
           git clone https://github.com/WildPlusKernel/kernel_patches.git --depth=1 --no-tags 
           
+      - name: Make SUSFS->KSU-Next patches for Build 7
+        run: |
+          cd ~/kernel_platform
+          cp -r susfs4ksu/kernel_patches/fs/* common/fs
+          cp -r susfs4ksu/kernel_patches/include/* common/include/
+          cp susfs4ksu/kernel_patches/50_add_susfs_in_gki-android12-5.10.patch common/       # Add android kernel patch
+          cp kernel_patches/69_hide_stuff.patch common/                                      # Add extra patchs
+          cd ~/kernel_platform/common
+          patch -p1 < 50_add_susfs_in_gki-android12-5.10.patch || echo "Patch failed but continuing" # Apply android kernel patch
+          echo " >>> NEXT PATCH <<<"
+          patch -p1 --fuzz=3 -F3 < 69_hide_stuff.patch || echo "Patch failed but continuing"                 # Apply extra patchs     
+          
       - name: Switch branch for Build 7
         run: |
           cd ~/kernel_platform/Wild_KSU
-          git switch wild
-
-          # NOT DONE YET!
+          git switch wild-susfs # Switch to SUSfs version
           
+      - name: Add Configuration and SUSfs Settings for Build 7
+        run: |
+          cd ~/kernel_platform
+          # Apply SUS config
+          echo "Adding configuration settings to gki_defconfig..."
+          
+          # Add SUSFS configuration settings
+          echo "CONFIG_KSU_SUSFS=y" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_KSU_SUSFS_SUS_PATH=y" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_KSU_SUSFS_SUS_MOUNT=y" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT=y" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT=y" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_KSU_SUSFS_SUS_KSTAT=y" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_KSU_SUSFS_SUS_OVERLAYFS=n" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_KSU_SUSFS_TRY_UMOUNT=y" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT=y" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_KSU_SUSFS_SPOOF_UNAME=y" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_KSU_SUSFS_ENABLE_LOG=y" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_KSU_SUSFS_OPEN_REDIRECT=y" >> ./common/arch/arm64/configs/gki_defconfig
+
+          # Magic mount setting for KSU = n, others = y!
+          echo "CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT=y" >> ./common/arch/arm64/configs/gki_defconfig # NEXT have Magic mount
+          echo "CONFIG_KSU_SUSFS_SUS_SU=n" >> ./common/arch/arm64/configs/gki_defconfig # ALWAYS USE n FOR LATEST ANY KSU
+          
+      - name: Build 7 (WildKSU+SUSFS)
+        run: |
+          cd ~/ && ./make_out.sh "WILD_SUSFS"
+
       - name: Check files before upload
         run: |
           echo "$(ls -lh ~/out_boot/)"
@@ -587,9 +639,3 @@ jobs:
         with:
           name: boot_images_all
           path: ~/out_boot/*
-
-#      - name: Upload final KSU state
-#        uses: actions/upload-artifact@v4
-#        with:
-#          name: KSUNext_patches
-#          path: ~/kernel_platform/KernelSU-Next/*
