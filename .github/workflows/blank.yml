@@ -49,9 +49,10 @@ jobs:
           if [[ "${{ github.event.inputs.local_clean }}" == 'none' ]]; then
           echo "nothing cleaned"
           elif [[ "${{ github.event.inputs.local_clean }}" == 'yes' ]]; then
-          rm -rf ~/.repo ~/.repoconfig ~/vendor ~/device ~/snap ~/kernel_platform ~/out_boot
+          rm -rf ~/.repo ~/.repoconfig ~/vendor ~/device ~/snap ~/kernel_platform ~/out_boot ~/temporary
           else
-          rm -rf ~/kernel_platform/common ~/kernel_platform/out ~/kernel_platform/KernelSU ~/kernel_platform/susfs4ksu ~/kernel_platform/kernel_patches ~/out_boot ~/kernel_platform/KernelSU-Next
+          rm -rf ~/kernel_platform/common ~/kernel_platform/out ~/kernel_platform/KernelSU ~/kernel_platform/susfs4ksu \
+          ~/kernel_platform/kernel_patches ~/out_boot ~/kernel_platform/KernelSU-Next ~/kernel_platform/Wild_KSU
           fi
 
       - name: Remove Unwanted Software
@@ -113,6 +114,7 @@ jobs:
       - name: Install repo tool
         if: github.event.inputs.run_mode == 'github'
         run: |
+          cd ~/
           curl https://storage.googleapis.com/git-repo-downloads/repo > ~/repo
           chmod a+x ~/repo
           sudo mv ~/repo /usr/local/bin/repo
@@ -183,11 +185,32 @@ jobs:
           MOD_VER="Unrooted"  # Name Kernel for user
           echo "MOD_VER=$MOD_VER" >> $GITHUB_ENV
 
-          # modify UTS_VERSION
-          perl -pi -e 's{UTS_VERSION="\$\(echo \$UTS_VERSION \$CONFIG_FLAGS \$TIMESTAMP \| cut -b -\$UTS_LEN\)"}{UTS_VERSION="#1 SMP PREEMPT Sun Apr 20 04:20:00 UTC 2025"}' ./common/scripts/mkcompile_h
-          sed -i 's/echo "\$res"/res="$(echo "\$res" | sed '\''\s\/-9-o-.*\/\/'\'' )"/' ./common/scripts/setlocalversion
-          echo 'echo "$res-QTARO-1.0-${MOD_VER}"' >> ./common/scripts/setlocalversion
+          # Run perl command to modify UTS_VERSION
+          DATESTR=$(date -u)
+          perl -pi -e 's{UTS_VERSION="\$\(echo \$UTS_VERSION \$CONFIG_FLAGS \$TIMESTAMP \| cut -b -\$UTS_LEN\)"}{UTS_VERSION="#1 SMP PREEMPT $DATESTR"}' ./common/scripts/mkcompile_h
+          perl -pi -e 's{UTS_VERSION="\$\(echo \$UTS_VERSION \$CONFIG_FLAGS \$TIMESTAMP \| cut -b -\$UTS_LEN\)"}{UTS_VERSION="#1 SMP PREEMPT $DATESTR"}' ./msm-kernel/scripts/mkcompile_h
+
+          # Modify kernel version in EVERY part
+          # sed -i 's/echo "\$res"/res="$(echo "\$res" | sed '\''\s\/-9-o-.*\/\/'\'' )"/' ./common/scripts/setlocalversion
+          # echo 'echo "$res-QTARO-1.0-${MOD_VER}"' >> ./common/scripts/setlocalversion
           sed -i 's/-dirty//' ./common/scripts/setlocalversion
+
+          # sed -i 's/echo "\$res"/res="$(echo "\$res" | sed '\''\s\/-9-o-.*\/\/'\'' )"/' ./msm-kernel/scripts/setlocalversion
+          # echo 'echo "$res-QTARO-1.0-${MOD_VER}"' >> ./msm-kernel/scripts/setlocalversion
+          sed -i 's/-dirty//' ./msm-kernel/scripts/setlocalversion
+          
+          # sed -i 's/echo "\$res"/res="$(echo "\$res" | sed '\''\s\/-9-o-.*\/\/'\'' )"/' ./external/dtc/scripts/setlocalversion
+          # echo 'echo "$res-QTARO-1.0-${MOD_VER}"' >> ./external/dtc/scripts/setlocalversion
+          sed -i 's/-dirty//' ./external/dtc/scripts/setlocalversion
+          
+          tac ./common/scripts/setlocalversion | sed '0,/echo "\$res"/s//res=\$\(echo \$res \| cut -d- -f1-2\)-QTARO-1.0-${MOD_VER}\;echo "\$res"\;/' | tac > ./common/scripts/setlocalversion.tmp && mv ./common/scripts/setlocalversion.tmp ./common/scripts/setlocalversion
+          tac ./msm-kernel/scripts/setlocalversion | sed '0,/echo "\$res"/s//res=\$\(echo \$res \| cut -d- -f1-2\)-QTARO-1.0-${MOD_VER}\;echo "\$res"\;/' | tac > ./msm-kernel/scripts/setlocalversion.tmp && mv ./msm-kernel/scripts/setlocalversion.tmp ./msm-kernel/scripts/setlocalversion
+          tac ./external/dtc/scripts/setlocalversion | sed '0,/echo "\$res"/s//res=\$\(echo \$res \| cut -d- -f1-2\)-QTARO-1.0-${MOD_VER}\;echo "\$res"\;/' | tac > ./external/dtc/scripts/setlocalversion.tmp && mv ./external/dtc/scripts/setlocalversion.tmp ./external/dtc/scripts/setlocalversion
+         
+          # Just in case
+          chmod +x ./common/scripts/setlocalversion
+          chmod +x ./msm-kernel/scripts/setlocalversion
+          chmod +x ./external/dtc/scripts/setlocalversion
                 # DOES NOT UPDATE WITH repo sync NO NEED TO OVERRIDE
 
       - name: Initial Kernel tweaks (config)
