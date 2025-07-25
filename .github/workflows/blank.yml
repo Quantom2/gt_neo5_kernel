@@ -1,0 +1,595 @@
+name: Build realme GT Neo 5 Kernels (5 variants)
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_mode:
+        type: choice
+        description: "Where to build"
+        required: true
+        default: "github" # or "local"
+        options:
+          - github
+          - local
+      local_clean:
+        type: choice
+        description: "Full cleanup?"
+        required: true
+        default: 'no' # or yes/none
+        options:
+          - 'no'
+          - 'yes'
+          - 'none'
+      zram_patch:
+        type: boolean
+        description: "Apply SukiSU ZRAM patch?"
+        required: true
+        default: false
+      SUS_branch:
+        type: string
+        description: "Use latest SUSFS or apply specific commit?"
+        required: true
+        default: 'latest'
+
+env:
+  CPU: 'sm8475'
+  FILE: 'realme_gt_neo5'
+  ANDROID_VERSION: 'android12'
+  KERNEL_NAME: '-android12-9'
+  RETENTION_COUNT: 5
+  
+jobs:
+  build:
+    runs-on: ${{ github.event.inputs.run_mode == 'local' && 'self-hosted' || 'ubuntu-latest' }}
+
+    steps:
+      - name: Local runner special cleanup
+        if: github.event.inputs.run_mode == 'local'
+        run: |
+          if [[ "${{ github.event.inputs.local_clean }}" == 'none' ]]; then
+          echo "nothing cleaned"
+          elif [[ "${{ github.event.inputs.local_clean }}" == 'yes' ]]; then
+          rm -rf ~/.repo ~/.repoconfig ~/vendor ~/device ~/snap ~/kernel_platform ~/out_boot
+          else
+          rm -rf ~/kernel_platform/common ~/kernel_platform/out ~/kernel_platform/KernelSU ~/kernel_platform/susfs4ksu ~/kernel_platform/kernel_patches ~/out_boot ~/kernel_platform/KernelSU-Next
+          fi
+
+      - name: Remove Unwanted Software
+        if: github.event.inputs.run_mode == 'github'
+        uses: AdityaGarg8/remove-unwanted-software@v5
+        with:
+          remove-dotnet: 'true'          # Frees ~2 GB
+          remove-android: 'true'         # Frees ~9 GB
+          remove-haskell: 'true'         # Frees ~5.2 GB
+          remove-codeql: 'true'          # Frees ~5.4 GB
+          remove-docker-images: 'true'   # Frees ~3.2 GB
+          remove-large-packages: 'true'  # Frees ~3.1 GB
+          remove-swapfile: 'false'       # Frees ~4 GB
+          remove-cached-tools: 'true'   # Avoid unless confirmed safe
+          verbose: 'false'               # Enable detailed logging
+
+      - name: Further cleanup
+        if: github.event.inputs.run_mode == 'github'
+        run: |
+          df -h
+          
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/local/share/powershell /usr/share/swift || true
+          sudo docker image prune --all --force
+          echo "some directories deleted"
+          
+          # Remove large unwanted packages
+          sudo apt-get purge -y \
+            aria2 ansible azure-cli shellcheck rpm xorriso zsync \
+            esl-erlang firefox gfortran-8 gfortran-9 google-chrome-stable \
+            google-cloud-sdk imagemagick \
+            libmagickcore-dev libmagickwand-dev libmagic-dev ant ant-optional kubectl \
+            mercurial apt-transport-https mono-complete libmysqlclient \
+            unixodbc-dev yarn chrpath libssl-dev libxft-dev \
+            libfreetype6 libfreetype6-dev libfontconfig1 libfontconfig1-dev \
+            snmp pollinate libpq-dev postgresql-client powershell ruby-full \
+            sphinxsearch subversion mongodb-org microsoft-edge-stable || true
+          
+          # Regex-based purges (for bulk families like mysql, php, dotnet)
+          sudo apt-get purge -y $(dpkg-query -W -f='${binary:Package}\n' | grep -E '^mysql|^php|^dotnet') || true
+          
+          # Clean up
+          sudo apt-get autoremove -y
+          sudo apt-get autoclean -y
+          echo "some packages purged"
+
+          df -h
+
+      - name: Configure Git
+        run: |
+          git config --global user.name "${{ secrets.WORK_NAME }}"
+          git config --global user.email "${{ secrets.WORK_EMAIL }}"
+
+      - name: Install dependencies
+        if: github.event.inputs.run_mode == 'github'
+        run: |
+          sudo apt update && sudo apt install -y git curl build-essential bc bison flex \
+          libssl-dev libelf-dev  repo python3-pip zip
+
+      - name: Install repo tool
+        if: github.event.inputs.run_mode == 'github'
+        run: |
+          curl https://storage.googleapis.com/git-repo-downloads/repo > ~/repo
+          chmod a+x ~/repo
+          sudo mv ~/repo /usr/local/bin/repo
+
+      - name: Sync kernel sources
+        run: |
+          cd ~/
+          repo init https://github.com/Quantom2/gt_neo5_kernel_manifest.git -b oneplus/sm8475 -m realme_gt_neo5.xml --depth=1 --no-tags
+          repo sync --force-sync --optimized-fetch --no-tags --no-clone-bundle --prune -j$(nproc --all)
+
+      - name: Disk Space Before Build
+        run: |
+          echo "Disk Space Before Build:"
+          df -h
+
+      - name: Download stock boot.img from Google Drive and get ready to Anykernel build, install custom tools
+        if: github.event.inputs.run_mode == 'github'
+        run: |
+          cd ~/
+          mkdir ~/stock_boot ~/boot ~/out_boot
+          pip install gdown
+          mkdir -p stock_boot
+          gdown --id 1PtSKw3jEZSyE1MhvzeUwy30wwv7D8_bQ -O stock_boot/boot.img
+          git clone https://github.com/WildPlusKernel/AnyKernel3.git -b gki-2.0 --depth=1 --no-tags
+
+      - name: Modify Oplus build script
+        if: github.event.inputs.run_mode == 'github' || github.event.inputs.local_clean == 'yes'
+        run: |
+          cd ~/kernel_platform/oplus/build/
+          sed -i '/init_environment/s/ \$1 \$2/ \$1 \$2 \$3 \$4 \$5/' oplus_build_kernel.sh
+          sed -i '/oplus_setup.sh/s/ \$1 \$2/ \$1 \$2 \$3 \$4 \$5/' oplus_build_kernel.sh
+                  # Allows to configure build automatically. DOES NOT UPDATE WITH repo sync NO NEED TO OVERRIDE
+          
+      - name: Make own tool
+        run: |
+          touch ~/make_out.sh
+          echo '
+          cd ~/ && ./kernel_platform/oplus/build/oplus_build_kernel.sh wapio gki full all disable
+          echo " >>> BUILDING BOOT IMG AND OTHERS <<< "
+          echo "     >>> NAME: ${1} "
+          cp ~/kernel_platform/out/msm-waipio-waipio-gki/dist/boot.img ~/boot
+          cd ~/ && ./kernel_platform/oplus/build/oplus_build_repack_bootimg.sh -k ~/boot/boot.img -r ~/stock_boot/boot.img -o ~/out_boot/
+          mv ~/out_boot/repacked-boot.img ~/out_boot/${1}_boot.img
+          # Anykernel3 using ~/AnyKernel3
+          cd ~/AnyKernel3
+          cp ~/kernel_platform/out/msm-waipio-waipio-gki/gki_kernel/dist/Image ~/AnyKernel3/Image
+          zip -r "../AnyKernel3" ./*
+          mv ~/AnyKernel3.zip ~/out_boot/AnyKernel3_${1}.zip
+          # Archive Image too
+          mv ~/AnyKernel3/Image ~/out_boot/Image_${1} || echo "Build >>> FAILED <<<"
+          echo " >>> DONE <<< "
+          ' > ~/make_out.sh
+          chmod a+x ~/make_out.sh
+                # Allows to automate boot.img, Anykernel3 and Image creation automation
+
+#          if ; then
+#            echo "CONFIG_KSU_SUSFS_SUS_SU=n" >> "$CONFIG_FILE"
+#            echo "CONFIG_KSU_MANUAL_HOOK=y" >> "$CONFIG_FILE"
+#          else
+#            echo "CONFIG_KSU_SUSFS_SUS_SU=y" >> "$CONFIG_FILE"
+#            echo "CONFIG_KPROBES=y" >> "$CONFIG_FILE"
+#          fi
+
+
+      - name: Change Kernel Name
+        run: |
+          cd ~/kernel_platform
+          MOD_VER="Unrooted"  # Name Kernel for user
+          echo "MOD_VER=$MOD_VER" >> $GITHUB_ENV
+
+          # modify UTS_VERSION
+          perl -pi -e 's{UTS_VERSION="\$\(echo \$UTS_VERSION \$CONFIG_FLAGS \$TIMESTAMP \| cut -b -\$UTS_LEN\)"}{UTS_VERSION="#1 SMP PREEMPT Sun Apr 20 04:20:00 UTC 2025"}' ./common/scripts/mkcompile_h
+          sed -i 's/echo "\$res"/res="$(echo "\$res" | sed '\''\s\/-9-o-.*\/\/'\'' )"/' ./common/scripts/setlocalversion
+          echo 'echo "$res-QTARO-1.0-${MOD_VER}"' >> ./common/scripts/setlocalversion
+          sed -i 's/-dirty//' ./common/scripts/setlocalversion
+                # DOES NOT UPDATE WITH repo sync NO NEED TO OVERRIDE
+
+      - name: Initial Kernel tweaks (config)
+        run: |
+          cd ~/kernel_platform
+
+          # Add additional tmpfs config setting
+          echo "CONFIG_TMPFS_XATTR=y" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_TMPFS_POSIX_ACL=y" >> ./common/arch/arm64/configs/gki_defconfig
+          
+          # Add additional config setting
+          echo "CONFIG_IP_NF_TARGET_TTL=y" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_IP6_NF_TARGET_HL=y" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_IP6_NF_MATCH_HL=y" >> ./common/arch/arm64/configs/gki_defconfig
+
+          # Add BBR Config
+          echo "CONFIG_TCP_CONG_ADVANCED=y" >> ./common/arch/arm64/configs/gki_defconfig 
+          echo "CONFIG_TCP_CONG_BBR=y" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_NET_SCH_FQ=y" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_TCP_CONG_BIC=n" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_TCP_CONG_WESTWOOD=n" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_TCP_CONG_HTCP=n" >> ./common/arch/arm64/configs/gki_defconfig 
+
+          # Remove check_defconfig
+          sed -i 's/check_defconfig//' ./common/build.config.gki
+
+      - name: Initial Kernel tweaks (ZRAM)
+        if: github.event.inputs.zram_patch == 'true'
+        run: |
+          cd ~/kernel_platform
+          git clone https://github.com/ShirkNeko/SukiSU_patch.git --depth=1 --no-tags
+          # cp SukiSU_patch/other/0001-lz4-Update-to-version-1.9.4.patch ~/kernel_platform/common/
+          cp -r SukiSU_patch/other/zram/lz4k/* ~/kernel_platform/common/
+          cp -r SukiSU_patch/other/zram/zram_patch/5.10/* ~/kernel_platform/common/
+          cp -r SukiSU_patch/other/zram/lz4k_oplus ~/kernel_platform/common/lib/
+          cd ~/kernel_platform/common
+          patch -p1 < lz4kd.patch
+          patch -p1 < lz4k_oplus.patch
+          # patch -p1 -F3 --fuzz=3 < 0001-lz4-Update-to-version-1.9.4.patch
+          # 1.9.4 Not working correctly
+          cd ~/kernel_platform && rm -rf SukiSU_patch
+          echo "CONFIG_ZRAM=y" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_CRYPTO_LZ4=y" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_CRYPTO_LZ4K=y" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_CRYPTO_LZ4KD=y" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_CRYPTO_LZ4HC=y" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_CRYPTO_LZ4K_OPLUS=y" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_LZ4HC_COMPRESS=y" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_LZ4_DECOMPRESS=y" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_LZ4K_COMPRESS=y" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_LZ4K_DECOMPRESS=y" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_LZ4KD_COMPRESS=y" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_LZ4KD_DECOMPRESS=y" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_ZRAM_DEF_COMP_LZ4KD=y" >> ./common/arch/arm64/configs/gki_defconfig
+          
+      - name: Build 1 (Stock kernel)
+        run: |
+          cd ~/ && ./make_out.sh "no_root"
+
+      - name: Disk Space after Build 1
+        run: |
+          echo "Disk Space after Build 1:"
+          df -h
+
+      - name: Get ready for reusing stock compiled files
+        run: |
+          if [[ "${{ github.event.inputs.run_mode }}" == 'github' ]]; then
+          TEMPORARY="${GITHUB_WORKSPACE}/temporary"
+          else
+          cd ~/temporary && TEMPORARY="$(pwd -L)"
+          fi
+          echo "TEMPORARY=$TEMPORARY" >> $GITHUB_ENV
+          echo "TEMPORARY = $TEMPORARY"
+          mkdir -p $TEMPORARY/out
+          mkdir -p $TEMPORARY/common
+          cp -r ~/kernel_platform/common/* "$TEMPORARY/common"
+          cp -r ~/kernel_platform/out/* "$TEMPORARY/out"
+
+      - name: Disk Space after saving OUT
+        run: |
+          echo "Disk Space after saving OUT:"
+          df -h
+
+      - name: Download KernelSU for Build 2
+        run: |
+          cd ~/kernel_platform
+          curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -
+          cd ~/
+
+      - name: Getting KernelSU Version to update MOD_VER for Build 2
+        run: |
+          cd ~/kernel_platform/KernelSU/kernel/
+          BASE_VERSION=10200
+          KSU_VERSION="$(expr $(/usr/bin/git rev-list --count HEAD) "+" $BASE_VERSION)"
+          echo "KSU_VERSION=$KSU_VERSION" >> $GITHUB_ENV            # Save KSU version for later
+          MOD_VER="KSU_Only_v${KSU_VERSION}" # Name Kernel for user
+          echo "MOD_VER=$MOD_VER" >> $GITHUB_ENV
+
+      - name: KernelSU Kernel tweaks for Build 2
+        run: |
+          cd ~/kernel_platform
+          echo "CONFIG_KSU=y" >> ./common/arch/arm64/configs/gki_defconfig
+          # Add patches
+          # echo "CONFIG_KSU_KPROBES_HOOK=y" >> ./common/arch/arm64/configs/gki_defconfig
+          
+      - name: Build 2 (KernelSU)
+        run: |
+          cd ~/ && ./make_out.sh "KSU"
+
+      - name: Disk Space after Build 2
+        run: |
+          echo "Disk Space after Build 2:"
+          df -h
+
+      - name: Download SUSFS and patches for Build 3
+        run: |
+          cd ~/kernel_platform
+          git clone https://gitlab.com/simonpunk/susfs4ksu.git -b gki-android12-5.10 --depth=1 --no-tags
+          git clone https://github.com/WildPlusKernel/kernel_patches.git --depth=1 --no-tags
+          cd ~/
+
+      - name: Make SUSFS->KSU patches for Build 3
+        run: |
+          cd ~/kernel_platform
+          cp -r susfs4ksu/kernel_patches/fs/* common/fs
+          cp -r susfs4ksu/kernel_patches/include/* common/include/
+          cp susfs4ksu/kernel_patches/50_add_susfs_in_gki-android12-5.10.patch common/  # Add android kernel patch
+          cp susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch KernelSU/  # Add KSU patch
+          cp kernel_patches/69_hide_stuff.patch common/                                 # Add extra patchs
+          cd ~/kernel_platform/common
+          patch -p1 < 50_add_susfs_in_gki-android12-5.10.patch || echo "Patch failed but continuing" # Apply android kernel patch
+          cd ~/kernel_platform/KernelSU/
+          patch -p1 --fuzz=1 -F1 < 10_enable_susfs_for_ksu.patch || echo "Patch failed but continuing"  # Apply KSU patch
+          cd ~/kernel_platform/common/
+          patch -p1 --fuzz=3 -F3 < 69_hide_stuff.patch || echo "Patch failed but continuing"         # Apply extra patchs
+          cd ~/
+          
+      - name: Add Configuration and SUSfs Settings for Build 3
+        run: |
+          echo "Adding configuration settings to gki_defconfig..."
+          
+          # Add SUSFS configuration settings
+          echo "CONFIG_KSU_SUSFS=y" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT=n" >> ./common/arch/arm64/configs/gki_defconfig # Use n for off KSU
+          echo "CONFIG_KSU_SUSFS_SUS_PATH=y" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_KSU_SUSFS_SUS_MOUNT=y" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT=y" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT=y" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_KSU_SUSFS_SUS_KSTAT=y" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_KSU_SUSFS_SUS_OVERLAYFS=n" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_KSU_SUSFS_TRY_UMOUNT=y" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT=y" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_KSU_SUSFS_SPOOF_UNAME=y" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_KSU_SUSFS_ENABLE_LOG=y" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_KSU_SUSFS_OPEN_REDIRECT=y" >> ./common/arch/arm64/configs/gki_defconfig
+
+          echo "CONFIG_KSU_SUSFS_SUS_SU=y" >> ./common/arch/arm64/configs/gki_defconfig # ALWAYS USE n FOR LATEST ANY KSU
+
+      - name: Adding SUSfs in the name KSU for Build 3
+        run: |
+          MOD_VER="KSU_v${KSU_VERSION}_SUSFS_v1.5.9" # Name Kernel for user
+          echo "MOD_VER=$MOD_VER" >> $GITHUB_ENV
+
+      - name: Build 3 (KernelSU+SUSFS)
+        run: |
+          cd ~/ && ./make_out.sh "KSU_SUSFS"
+
+      - name: Remove root solution 
+        run: |
+          rm -rf ~/kernel_platform/KernelSU ~/kernel_platform/susfs4ksu ~/kernel_platform/kernel_patches
+
+      - name: Reusing stock compiled files №1
+        run: |
+          rm -rf ~/kernel_platform/common ~/kernel_platform/out
+          cd ~/ && repo sync --force-sync --optimized-fetch --no-tags --no-clone-bundle --prune -j$(nproc --all)
+          mkdir -p ~/kernel_platform/common/
+          mkdir -p ~/kernel_platform/out/
+          cp -r "$TEMPORARY/common/"* ~/kernel_platform/common/
+          cp -r "$TEMPORARY/out/"* ~/kernel_platform/out/
+
+      - name: Download KSUNext for Build 4
+        run: |
+          cd ~/kernel_platform
+          curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -
+          cd ~/
+
+      - name: Getting KernelSUNext Version to update MOD_VER for Build 4
+        run: |
+          cd ~/kernel_platform/KernelSU-Next/kernel/
+          BASE_VERSION=10200
+          KSU_VERSION="$(expr $(/usr/bin/git rev-list --count HEAD) "+" $BASE_VERSION)"
+          echo "KSU_VERSION=$KSU_VERSION" >> $GITHUB_ENV            # Save KSU version for later
+          MOD_VER="KSUN_Only_v${KSU_VERSION}" # Name Kernel for user
+          echo "MOD_VER=$MOD_VER" >> $GITHUB_ENV
+
+      - name: KernelSUNext config update for Build 4
+        run: |    
+          # Add patches
+          cd ~/kernel_platform/
+          echo "CONFIG_KSU=y" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_KSU_KPROBES_HOOK=n" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_KSU_MANUAL_HOOK=y" >> ./common/arch/arm64/configs/gki_defconfig #FOR TEST
+
+      - name: Apply manual hooks for Build 4
+        run: |
+          cd ~/kernel_platform
+          git clone https://github.com/WildPlusKernel/kernel_patches.git --depth=1 --no-tags
+          cp kernel_patches/next/scope_min_manual_hooks_v1.4.patch common/           # Add manual hooks
+          cd ~/kernel_platform/common
+          patch -p1 --fuzz=3 -F3 < scope_min_manual_hooks_v1.4.patch || echo "Patch failed but continuing"
+          rm -rf ~/kernel_platform/kernel_patches
+          
+      - name: Build 4 (KSUNext)
+        run: |
+          cd ~/ && ./make_out.sh "KSUN"
+
+      - name: Adding SUSfs in the name for Build 5
+        run: |
+          MOD_VER="KSUN_v${KSU_VERSION}_SUSFS_v1.5.9" # Name Kernel for user
+          echo "MOD_VER=$MOD_VER" >> $GITHUB_ENV
+
+      - name: Download SUSfs and patches for Build 5
+        run: |
+          cd ~/kernel_platform
+          if [[ "${{ github.event.inputs.SUS_branch }}" == 'latest' ]]; then
+          git clone https://gitlab.com/simonpunk/susfs4ksu.git -b gki-android12-5.10 --depth=1 --no-tags
+          else
+          git init susfs4ksu
+          cd ~/kernel_platform/susfs4ksu
+          git remote add origin https://gitlab.com/simonpunk/susfs4ksu.git
+          git fetch origin "${{ inputs.SUS_branch }}" --depth=1 --no-tags
+          git checkout FETCH_HEAD
+          fi
+          cd ~/kernel_platform
+          git clone https://github.com/WildPlusKernel/kernel_patches.git --depth=1 --no-tags
+
+      - name: Make SUSFS->KSU-Next patches for Build 5
+        run: |
+          cd ~/kernel_platform
+          cp -r susfs4ksu/kernel_patches/fs/* common/fs
+          cp -r susfs4ksu/kernel_patches/include/* common/include/
+          cp susfs4ksu/kernel_patches/50_add_susfs_in_gki-android12-5.10.patch common/       # Add android kernel patch
+          cp susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch KernelSU-Next/  # Add KSU patch
+          cp kernel_patches/69_hide_stuff.patch common/                                      # Add extra patchs
+          cp kernel_patches/next/scope_min_manual_hooks_v1.4.patch common/                   # Add extra patchs for NEXT
+          cd ~/kernel_platform/common
+          patch -p1 < 50_add_susfs_in_gki-android12-5.10.patch || echo "Patch failed but continuing" # Apply android kernel patch
+          echo " >>> NEXT PATCH <<<"
+          patch -p1 --fuzz=3 -F3 < scope_min_manual_hooks_v1.4.patch || echo "Patch failed but continuing"
+          echo " >>> NEXT PATCH <<<"
+          cd ~/kernel_platform/KernelSU-Next/
+          patch -p1 --fuzz=3 -F3 < 10_enable_susfs_for_ksu.patch || echo "Patch failed but continuing"            # Apply KSU patch
+          echo " >>> NEXT PATCH <<<"
+          cd ~/kernel_platform/common/
+          patch -p1 --fuzz=3 -F3 < 69_hide_stuff.patch || echo "Patch failed but continuing"                 # Apply extra patchs
+          echo " >>> NEXT PATCH <<<"
+          cd ~/
+
+          #More patches
+          cd ~/kernel_platform/kernel_patches/next/susfs_fix_patches/v1.5.9/
+          cp fix_apk_sign.c.patch ~/kernel_platform/KernelSU-Next/
+          cp fix_core_hook.c.patch ~/kernel_platform/KernelSU-Next/
+          cp fix_selinux.c.patch ~/kernel_platform/KernelSU-Next/
+          cp fix_ksud.c.patch ~/kernel_platform/KernelSU-Next/
+          cp fix_rules.c.patch ~/kernel_platform/KernelSU-Next/
+          cp fix_sucompat.c.patch ~/kernel_platform/KernelSU-Next/
+
+              cd ~/kernel_platform/KernelSU-Next/
+              patch -p1 --forward --fuzz=3 -F3 < fix_apk_sign.c.patch || echo "Patch failed but continuing"
+              echo " >>> NEXT PATCH <<<"
+              patch -p1 --fuzz=3 < fix_core_hook.c.patch || echo "Patch failed but continuing"
+              echo " >>> NEXT PATCH <<<"
+              patch -p1 --forward --fuzz=3 < fix_selinux.c.patch || echo "Patch failed but continuing"
+              echo " >>> NEXT PATCH <<<"
+              patch -p1 --forward --fuzz=3 < fix_ksud.c.patch || echo "Patch failed but continuing"
+              echo " >>> NEXT PATCH <<<"
+              patch -p1 --forward --fuzz=3 < fix_rules.c.patch || echo "Patch failed but continuing"
+              echo " >>> NEXT PATCH <<<"
+              patch -p1 --forward --fuzz=3 < fix_sucompat.c.patch || echo "Patch failed but continuing"
+              
+      - name: Add Configuration and SUSfs Settings for Build 5
+        run: |
+          # Apply SUS config
+          echo "Adding configuration settings to gki_defconfig..."
+          
+          # Add SUSFS configuration settings
+          echo "CONFIG_KSU_SUSFS=y" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT=y" >> ./common/arch/arm64/configs/gki_defconfig # NEXT have Magic mount
+          echo "CONFIG_KSU_SUSFS_SUS_PATH=y" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_KSU_SUSFS_SUS_MOUNT=y" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT=y" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT=y" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_KSU_SUSFS_SUS_KSTAT=y" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_KSU_SUSFS_SUS_OVERLAYFS=n" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_KSU_SUSFS_TRY_UMOUNT=y" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT=y" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_KSU_SUSFS_SPOOF_UNAME=y" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_KSU_SUSFS_ENABLE_LOG=y" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_KSU_SUSFS_OPEN_REDIRECT=y" >> ./common/arch/arm64/configs/gki_defconfig
+
+          echo "CONFIG_KSU_SUSFS_SUS_SU=n" >> ./common/arch/arm64/configs/gki_defconfig # ALWAYS USE n FOR LATEST ANY KSU
+
+          # Temporary solution
+          cp ~/KernelSU-Next_Patched/kernel/core_hook.c ~/kernel_platform/KernelSU-Next/kernel/
+
+
+      - name: Build 5 (KSUNext+SUSFS)
+        run: |
+          cd ~/ && ./make_out.sh "KSUN+SUSFS"
+          
+      - name: Remove root solution
+        run: |
+          rm -rf ~/kernel_platform/KernelSU-Next ~/kernel_platform/susfs4ksu ~/kernel_platform/kernel_patches
+
+      - name: Reusing stock compiled files №2
+        run: |
+          rm -rf ~/kernel_platform/common ~/kernel_platform/out
+          cd ~/ && repo sync --force-sync --optimized-fetch --no-tags --no-clone-bundle --prune -j$(nproc --all)
+          mkdir -p ~/kernel_platform/common/
+          mkdir -p ~/kernel_platform/out/
+          cp -r "$TEMPORARY/common/"* ~/kernel_platform/common/
+          cp -r "$TEMPORARY/out/"* ~/kernel_platform/out/
+
+      - name: Download WildKSU for Build 6
+        run: |
+          cd ~/kernel_platform
+          curl -LSs "https://raw.githubusercontent.com/WildKernels/Wild_KSU/wild/kernel/setup.sh" | bash -
+          git switch wild
+          cd ~/
+          
+      - name: Getting WildKSU Version to update MOD_VER for Build 6
+        run: |
+          cd ~/kernel_platform/Wild_KSU/kernel/
+          BASE_VERSION=10200
+          KSU_VERSION="$(expr $(/usr/bin/git rev-list --count HEAD) "+" $BASE_VERSION)"
+          MOD_VER="WildKSU_Only_v${KSU_VERSION}" # Name Kernel for user
+          echo "MOD_VER=$MOD_VER" >> $GITHUB_ENV
+
+      - name: Download and apply patches for Build 6
+        run: |
+          cd ~/kernel_platform
+          git clone https://github.com/WildPlusKernel/kernel_patches.git --depth=1 --no-tags
+          cp kernel_patches/69_hide_stuff.patch common/                                      # Add extra patchs
+          cp kernel_patches/wild/syscall_hooks.patch common/                   # Add extra patchs for WILD
+          cd ~/kernel_platform/common
+          patch -p1 -F3 < syscall_hooks.patch || echo "Patch failed but continuing" # Apply android kernel patch
+          rm -rf kernel_patches
+
+      - name: WildKSU Kernel tweaks for Build 6
+        run: |
+          cd ~/kernel_platform
+          echo "CONFIG_KSU=y" >> ./common/arch/arm64/configs/gki_defconfig
+          # Add patches
+          echo "CONFIG_KSU_KPROBES_HOOK=n" >> ./common/arch/arm64/configs/gki_defconfig
+          
+      - name: Build 6 (WildKSU)
+        run: |
+          cd ~/ && ./make_out.sh "WILD"
+
+      - name: Adding SUSfs in the name for Build 7
+        run: |
+          MOD_VER="WildKSU_v${KSU_VERSION}_SUSFS_v1.5.9" # Name Kernel for user
+          echo "MOD_VER=$MOD_VER" >> $GITHUB_ENV
+
+      - name: Download SUSfs and patches for Build 7
+        run: |
+          cd ~/kernel_platform
+          if [[ "${{ github.event.inputs.SUS_branch }}" == 'latest' ]]; then
+          git clone https://gitlab.com/simonpunk/susfs4ksu.git -b gki-android12-5.10 --depth=1 --no-tags
+          else
+          git init susfs4ksu
+          cd ~/kernel_platform/susfs4ksu
+          git remote add origin https://gitlab.com/simonpunk/susfs4ksu.git
+          git fetch origin "${{ inputs.SUS_branch }}" --depth=1 --no-tags
+          git checkout FETCH_HEAD
+          fi
+          cd ~/kernel_platform
+          git clone https://github.com/WildPlusKernel/kernel_patches.git --depth=1 --no-tags 
+          
+      - name: Switch branch for Build 7
+        run: |
+          cd ~/kernel_platform/Wild_KSU
+          git switch wild
+
+          # NOT DONE YET!
+          
+      - name: Check files before upload
+        run: |
+          echo "$(ls -lh ~/out_boot/)"
+
+      - name: Upload all boot.img files
+        uses: actions/upload-artifact@v4
+        with:
+          name: boot_images_all
+          path: ~/out_boot/*
+
+#      - name: Upload final KSU state
+#        uses: actions/upload-artifact@v4
+#        with:
+#          name: KSUNext_patches
+#          path: ~/kernel_platform/KernelSU-Next/*
