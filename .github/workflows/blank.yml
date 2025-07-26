@@ -321,7 +321,8 @@ jobs:
           cd ~/kernel_platform
           echo "CONFIG_KSU=y" >> ./common/arch/arm64/configs/gki_defconfig
           # Add patches
-          echo "CONFIG_KSU_KPROBES_HOOK=n" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_KSU_KPROBES_HOOK=y" >> ./common/arch/arm64/configs/gki_defconfig
+          # KPROBES yes since manual hooks is not supported?
           
       - name: Build 2 (KernelSU)
         run: |
@@ -387,7 +388,12 @@ jobs:
       - name: Build 3 (KernelSU+SUSFS)
         run: |
           cd ~/ && ./make_out.sh "KSU_SUSFS"
-
+          
+      - name: Disk Space after Build 3
+        run: |
+          echo "Disk Space after Build 3:"
+          df -h
+          
       - name: Remove root solution 
         run: |
           rm -rf ~/kernel_platform/KernelSU ~/kernel_platform/susfs4ksu ~/kernel_platform/kernel_patches
@@ -400,6 +406,11 @@ jobs:
           mkdir -p ~/kernel_platform/out/
           cp -r "$TEMPORARY/common/"* ~/kernel_platform/common/
           cp -r "$TEMPORARY/out/"* ~/kernel_platform/out/
+
+      - name: Disk Space before Build 4
+        run: |
+          echo "Disk Space before Build 4:"
+          df -h
 
       - name: Download KSUNext for Build 4
         run: |
@@ -436,7 +447,12 @@ jobs:
       - name: Build 4 (KSUNext)
         run: |
           cd ~/ && ./make_out.sh "KSUN"
-
+          
+      - name: Disk Space after Build 4
+        run: |
+          echo "Disk Space after Build 4:"
+          df -h
+          
       - name: Adding SUSfs in the name for Build 5
         run: |
           MOD_VER="KSUN_v${KSU_VERSION}_SUSFS_v1.5.9" # Name Kernel for user
@@ -534,6 +550,11 @@ jobs:
         run: |
           cd ~/ && ./make_out.sh "KSUN+SUSFS"
           
+      - name: Disk Space after Build 5
+        run: |
+          echo "Disk Space after Build 5:"
+          df -h
+          
       - name: Remove root solution
         run: |
           rm -rf ~/kernel_platform/KernelSU-Next ~/kernel_platform/susfs4ksu ~/kernel_platform/kernel_patches
@@ -547,10 +568,16 @@ jobs:
           cp -r "$TEMPORARY/common/"* ~/kernel_platform/common/
           cp -r "$TEMPORARY/out/"* ~/kernel_platform/out/
 
+      - name: Disk Space before Build 6
+        run: |
+          echo "Disk Space before Build 6:"
+          df -h
+
       - name: Download WildKSU for Build 6
         run: |
           cd ~/kernel_platform
-          curl -LSs "https://raw.githubusercontent.com/WildKernels/Wild_KSU/wild/kernel/setup.sh" | bash -
+          curl -LSs "https://raw.githubusercontent.com/WildKernels/Wild_KSU/wild/kernel/setup.sh" | bash wild
+          cd ~/kernel_platform/Wild_KSU
           git switch wild # Make sure it is not SUSfs version
           cd ~/
           
@@ -579,6 +606,11 @@ jobs:
           echo "CONFIG_KSU=y" >> ./common/arch/arm64/configs/gki_defconfig
           echo "CONFIG_KSU_KPROBES_HOOK=n" >> ./common/arch/arm64/configs/gki_defconfig
           echo "CONFIG_KSU_MANUAL_HOOK=y" >> ./common/arch/arm64/configs/gki_defconfig
+          
+      - name: Disk Space after Build 6
+        run: |
+          echo "Disk Space after Build 6:"
+          df -h      
           
       - name: Build 6 (WildKSU)
         run: |
@@ -649,6 +681,11 @@ jobs:
       - name: Build 7 (WildKSU+SUSFS)
         run: |
           cd ~/ && ./make_out.sh "WILD_SUSFS"
+
+      - name: Disk Space after Build 7
+        run: |
+          echo "Disk Space after Build 7:"
+          df -h
 
       - name: Check files before upload
         run: |
